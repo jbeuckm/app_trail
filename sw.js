@@ -1,4 +1,6 @@
-const CACHE_NAME = 'at-trail-shell-v3';
+const CACHE_NAME = 'at-trail-shell-v4';
+
+// Exact URLs for the app shell (cache-first: always served from cache once installed).
 const SHELL_FILES = [
   './',
   './index.html',
@@ -8,11 +10,27 @@ const SHELL_FILES = [
   './icons/apple-touch-icon.png'
 ];
 
+// Third-party library/style files needed to render the map at all. Precached
+// at install so a single visit is enough to make the app fully offline-capable,
+// rather than relying on them being opportunistically cached later.
+const LIBRARY_URLS = [
+  'https://cdn.jsdelivr.net/npm/maplibre-gl@4/dist/maplibre-gl.js',
+  'https://cdn.jsdelivr.net/npm/maplibre-gl@4/dist/maplibre-gl.css',
+  'https://tiles.openfreemap.org/styles/liberty'
+];
+
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(SHELL_FILES))
-      .then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(async cache => {
+      await cache.addAll(SHELL_FILES);
+      // Fetch each library file individually (not cache.addAll) so one failed
+      // fetch (e.g. flaky connection during install) doesn't abort the rest.
+      await Promise.all(LIBRARY_URLS.map(url =>
+        fetch(url, { mode: 'cors' })
+          .then(res => { if (res.ok) return cache.put(url, res); })
+          .catch(() => {})
+      ));
+    }).then(() => self.skipWaiting())
   );
 });
 
@@ -24,16 +42,26 @@ self.addEventListener('activate', event => {
   );
 });
 
-// App shell: cache-first. Everything else (map tiles, fonts): network-first,
-// falling back to cache so the page still boots if the tile fetch fails.
+// Resolve SHELL_FILES to absolute URLs once, for exact matching below
+// (a previous version matched by string suffix, which had a bug: './'
+// stripped down to an empty string that matched every request).
+const SHELL_URLS = new Set(SHELL_FILES.map(f => new URL(f, self.registration.scope).href));
+
+// App shell: cache-first (fast, always available offline).
+// Everything else (map library, style, tiles, fonts): network-first so
+// content stays fresh, falling back to cache so it still works offline
+// for anything fetched on a previous visit (including the precached
+// library/style files above).
 self.addEventListener('fetch', event => {
-  const isShellRequest = SHELL_FILES.some(f => event.request.url.endsWith(f.replace('./', '')));
-  if (isShellRequest) {
+  if (event.request.method !== 'GET') return;
+
+  if (SHELL_URLS.has(event.request.url)) {
     event.respondWith(
       caches.match(event.request).then(cached => cached || fetch(event.request))
     );
     return;
   }
+
   event.respondWith(
     fetch(event.request)
       .then(response => {
