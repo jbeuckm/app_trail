@@ -1,4 +1,4 @@
-const CACHE_NAME = 'at-trail-shell-v6';
+const CACHE_NAME = 'at-trail-shell-v7';
 
 // Exact URLs for the app shell (cache-first: always served from cache once installed).
 const SHELL_FILES = [

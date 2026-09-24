@@ -260,8 +260,13 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
   // Topographic layer: hillshade + contour lines generated client-side from AWS Terrain Tiles
   const DEM_URL = 'https://elevation-tiles-prod.s3.amazonaws.com/terrarium/{z}/{x}/{y}.png';
   const TOPO_LAYERS = ['topo-hillshade', 'topo-contours', 'topo-contour-labels'];
-  const demSource = new mlcontour.DemSource({ url: DEM_URL, encoding: 'terrarium', maxzoom: 13, worker: true });
-  demSource.setupMaplibre(maplibregl);
+  // Optional: if the contour plugin didn't load (e.g. offline before it was cached),
+  // skip topo rather than breaking the rest of the app
+  const demSource = window.mlcontour
+    ? new mlcontour.DemSource({ url: DEM_URL, encoding: 'terrarium', maxzoom: 13, worker: true })
+    : null;
+  demSource?.setupMaplibre(maplibregl);
+  if (!demSource) topoBtn.hidden = true;
 
   function addTopoLayers() {
     // Draw under the basemap's labels so place names stay readable
@@ -327,8 +332,10 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
   topoBtn.addEventListener('click', () => setTopo(!topoBtn.classList.contains('active')));
 
   map.on('load', () => {
-    addTopoLayers();
-    setTopo(prefs.get('topo', true));
+    if (demSource) {
+      addTopoLayers();
+      setTopo(prefs.get('topo', true));
+    }
 
     map.addSource('appalachian-trail', {
       type: 'geojson',
