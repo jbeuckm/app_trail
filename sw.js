@@ -1,4 +1,4 @@
-const CACHE_NAME = 'at-trail-shell-v4';
+const CACHE_NAME = 'at-trail-shell-v5';
 
 // Exact URLs for the app shell (cache-first: always served from cache once installed).
 const SHELL_FILES = [
@@ -7,7 +7,9 @@ const SHELL_FILES = [
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
-  './icons/apple-touch-icon.png'
+  './icons/apple-touch-icon.png',
+  './icons/maskable-192.png',
+  './icons/maskable-512.png'
 ];
 
 // Third-party library/style files needed to render the map at all. Precached
