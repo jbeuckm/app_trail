@@ -292,6 +292,12 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
   });
 
   map.addControl(new maplibregl.NavigationControl(), 'top-right');
+  // Blue dot for the user's position; GPS works offline, so this is usable on the trail
+  map.addControl(new maplibregl.GeolocateControl({
+    positionOptions: { enableHighAccuracy: true },
+    trackUserLocation: true,
+    showUserHeading: true
+  }), 'top-right');
   map.addControl(new maplibregl.ScaleControl({ unit: 'imperial' }), 'bottom-right');
 
   // Per-viewer preferences; storage can be unavailable (private mode), so never rely on it
