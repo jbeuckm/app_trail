@@ -1,4 +1,4 @@
-const CACHE_NAME = 'at-trail-shell-v2';
+const CACHE_NAME = 'at-trail-shell-v3';
 const SHELL_FILES = [
   './',
   './index.html',
