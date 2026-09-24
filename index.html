@@ -132,7 +132,8 @@
     font-weight: 600;
     color: #333;
   }
-  .text-ctrl button.active { background: #1a365d; color: #fff; }
+  /* Beat MapLibre's hover style, which otherwise sticks after a tap on touch screens */
+  .maplibregl-ctrl-group.text-ctrl button.active:not(:disabled) { background: #1a365d; color: #fff; }
 
   .panel {
     position: absolute;
@@ -222,6 +223,16 @@
   #log-empty { color: #666; margin-top: 6px; }
   .log-actions { display: flex; gap: 8px; margin-top: 8px; }
   #legend .swatch.hiked { background: #15803d; }
+  #legend .wild-dots { display: flex; gap: 2px; }
+  #legend .wild-dots i { width: 7px; height: 7px; border-radius: 50%; border: 1px solid #fff; }
+
+  .inat-popup { width: 200px; font-size: 12px; color: #222; }
+  .inat-popup img { display: block; width: 100%; height: 150px; object-fit: cover; border-radius: 4px; background: #eee; }
+  .inat-popup .name { font-weight: 600; font-size: 13px; margin-top: 6px; }
+  .inat-popup .sci { font-style: italic; color: #555; }
+  .inat-popup .meta { color: #666; margin-top: 3px; }
+  .inat-popup .credit { color: #888; font-size: 10.5px; margin-top: 3px; }
+  .inat-popup a { display: inline-block; margin-top: 5px; color: #1a56db; }
   #plan-reset {
     margin-left: auto;
     border: 1px solid #bbb;
@@ -243,6 +254,10 @@
 <div id="legend">
   <div class="legend-row"><div class="swatch"></div> Appalachian Trail</div>
   <div class="legend-row"><div class="dot"></div> Trailhead / Access Point</div>
+  <div class="legend-row" id="legend-wild" hidden>
+    <div class="wild-dots"><i style="background:#92400e"></i><i style="background:#0284c7"></i><i style="background:#65a30d"></i><i style="background:#d97706"></i></div>
+    Wildlife sightings (iNaturalist)
+  </div>
   <div class="legend-row" id="legend-hiked" hidden><div class="swatch hiked"></div> Your logged hikes</div>
 </div>
 <div id="planner" class="panel" hidden>
@@ -316,11 +331,14 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
   const logBtn = document.createElement('button');
   logBtn.textContent = 'Log';
   logBtn.title = 'Your hike log';
+  const wildBtn = document.createElement('button');
+  wildBtn.textContent = 'Wildlife';
+  wildBtn.title = 'Show wildlife sightings from iNaturalist';
   map.addControl({
     onAdd() {
       const div = document.createElement('div');
       div.className = 'maplibregl-ctrl maplibregl-ctrl-group text-ctrl';
-      div.append(topoBtn, planBtn, logBtn);
+      div.append(topoBtn, planBtn, logBtn, wildBtn);
       return div;
     },
     onRemove() {}
@@ -483,6 +501,8 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
       paint: { 'line-color': '#15803d', 'line-width': ['interpolate', ['linear'], ['zoom'], 3, 6, 8, 4, 12, 3, 17, 2] }
     }, 'entrance-points');
     routeReady.then(renderLog);
+    addWildlifeLayers();
+    setWildlife(prefs.get('wildlife', false));
 
     // Selected hike section, drawn over the trail but under the trailhead dots
     map.addSource('hike-section', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
@@ -889,6 +909,115 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
       alert('That file is not a hike log export.');
     }
   });
+
+  // ---- Wildlife sightings (iNaturalist) ----
+  // Research-grade animal observations inside iNaturalist's "Appalachian National Scenic
+  // Trail" place. Zoomed out: iNaturalist's heatmap tiles. Zoomed in: clickable
+  // points fetched for the visible area. Needs a connection; nothing is stored offline.
+  const INAT_FILTER = 'place_id=95097&taxon_id=1&quality_grade=research';
+  const INAT_POINTS_MINZOOM = 10;
+  const INAT_ATTRIBUTION = 'Wildlife: <a href="https://www.inaturalist.org" target="_blank">iNaturalist</a>';
+  const INAT_COLORS = ['match', ['get', 'group'],
+    'Mammalia', '#92400e',
+    'Aves', '#0284c7',
+    'Reptilia', '#65a30d', 'Amphibia', '#65a30d',
+    'Insecta', '#d97706', 'Arachnida', '#d97706',
+    '#6b7280'];
+  const sightings = new Map();
+  let sightingsFetch = null, sightingsTimer = null;
+
+  function addWildlifeLayers() {
+    map.addSource('inat-tiles', {
+      type: 'raster',
+      tiles: [`https://api.inaturalist.org/v1/heatmap/{z}/{x}/{y}.png?${INAT_FILTER}`],
+      tileSize: 256,
+      attribution: INAT_ATTRIBUTION
+    });
+    map.addLayer({ id: 'inat-tiles', type: 'raster', source: 'inat-tiles', maxzoom: INAT_POINTS_MINZOOM,
+      paint: { 'raster-opacity': 0.5 } }, 'at-line-casing');
+    map.addSource('inat', { type: 'geojson', data: { type: 'FeatureCollection', features: [] }, attribution: INAT_ATTRIBUTION });
+    map.addLayer({
+      id: 'inat-points',
+      type: 'circle',
+      source: 'inat',
+      minzoom: INAT_POINTS_MINZOOM,
+      paint: {
+        'circle-radius': ['interpolate', ['linear'], ['zoom'], 10, 4, 15, 7],
+        'circle-color': INAT_COLORS,
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 1.5
+      }
+    });
+  }
+
+  function loadSightings() {
+    if (!wildBtn.classList.contains('active') || map.getZoom() < INAT_POINTS_MINZOOM) return;
+    const b = map.getBounds();
+    const bbox = `swlat=${b.getSouth()}&swlng=${b.getWest()}&nelat=${b.getNorth()}&nelng=${b.getEast()}`;
+    sightingsFetch?.abort();
+    sightingsFetch = new AbortController();
+    const fields = 'id,observed_on,uri,geojson,taxon.name,taxon.preferred_common_name,taxon.iconic_taxon_name,photos.url,photos.attribution,user.login';
+    fetch(`https://api.inaturalist.org/v2/observations?${INAT_FILTER}&${bbox}&per_page=200&fields=${fields}`,
+      { signal: sightingsFetch.signal })
+      .then(r => r.ok ? r.json() : Promise.reject(r.status))
+      .then(({ results }) => {
+        if (sightings.size > 3000) sightings.clear();
+        for (const o of results) {
+          if (!o.geojson || !o.taxon) continue;
+          const photo = o.photos?.[0];
+          sightings.set(o.id, {
+            type: 'Feature',
+            geometry: o.geojson,
+            properties: {
+              name: o.taxon.preferred_common_name || o.taxon.name,
+              sci: o.taxon.name,
+              group: o.taxon.iconic_taxon_name || '',
+              date: o.observed_on || '',
+              user: o.user?.login || '',
+              uri: o.uri,
+              photo: photo ? photo.url.replace('/square.', '/small.') : '',
+              credit: photo?.attribution || ''
+            }
+          });
+        }
+        map.getSource('inat').setData({ type: 'FeatureCollection', features: [...sightings.values()] });
+      })
+      .catch(() => {}); // offline, aborted, or rate-limited: keep what's already shown
+  }
+
+  function setWildlife(on) {
+    ['inat-tiles', 'inat-points'].forEach(id => map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'));
+    wildBtn.classList.toggle('active', on);
+    document.getElementById('legend-wild').hidden = !on;
+    prefs.set('wildlife', on);
+    loadSightings();
+  }
+  wildBtn.addEventListener('click', () => setWildlife(!wildBtn.classList.contains('active')));
+
+  // Debounced so panning doesn't hammer the API (iNaturalist asks for ~1 request/sec at most)
+  map.on('moveend', () => {
+    clearTimeout(sightingsTimer);
+    sightingsTimer = setTimeout(loadSightings, 700);
+  });
+
+  map.on('click', 'inat-points', e => {
+    if (!planner.hidden) return; // taps set hike points while planning
+    const f = e.features[0].properties;
+    const date = f.date ? fmtDate(f.date) : 'Unknown date';
+    new maplibregl.Popup({ maxWidth: '230px' })
+      .setLngLat(e.features[0].geometry.coordinates)
+      .setHTML(`<div class="inat-popup">
+        ${f.photo ? `<img src="${esc(f.photo)}" alt="${esc(f.name)}">` : ''}
+        <div class="name">${esc(f.name)}</div>
+        ${f.name !== f.sci ? `<div class="sci">${esc(f.sci)}</div>` : ''}
+        <div class="meta">${date}${f.user ? ` &middot; ${esc(f.user)}` : ''}</div>
+        ${f.credit ? `<div class="credit">Photo ${esc(f.credit)}</div>` : ''}
+        <a href="${esc(f.uri)}" target="_blank" rel="noopener">View on iNaturalist</a>
+      </div>`)
+      .addTo(map);
+  });
+  map.on('mouseenter', 'inat-points', () => { if (planner.hidden) map.getCanvas().style.cursor = 'pointer'; });
+  map.on('mouseleave', 'inat-points', () => { if (planner.hidden) map.getCanvas().style.cursor = ''; });
 
   // Register service worker so the app shell is available on repeat visits /
   // when added to the home screen. No-ops safely on file:// or unsupported browsers.
