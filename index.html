@@ -134,7 +134,7 @@
   }
   .text-ctrl button.active { background: #1a365d; color: #fff; }
 
-  #planner {
+  .panel {
     position: absolute;
     left: calc(12px + var(--sal));
     right: calc(12px + var(--sar));
@@ -148,15 +148,15 @@
     font-size: 13px;
     color: #222;
   }
-  #planner[hidden], #legend[hidden] { display: none; }
-  #planner header {
+  .panel[hidden], #legend[hidden], .legend-row[hidden], #log-form[hidden] { display: none; }
+  .panel header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     font-weight: 600;
     font-size: 14px;
   }
-  #planner header button {
+  .panel header button {
     border: none;
     background: transparent;
     font-size: 20px;
@@ -186,6 +186,42 @@
     border: 1px solid #bbb;
     border-radius: 4px;
   }
+  #log-form { margin-top: 8px; border-top: 1px solid #ddd; padding-top: 8px; }
+  #log-form .form-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; color: #444; }
+  #log-form .form-row + * { margin-top: 6px; }
+  #log-form input { font-size: 16px; padding: 2px 4px; border: 1px solid #bbb; border-radius: 4px; }
+  #log-form input[type=number] { width: 44px; }
+  #log-form textarea {
+    display: block; width: 100%; box-sizing: border-box;
+    font: inherit; font-size: 16px; padding: 4px 6px;
+    border: 1px solid #bbb; border-radius: 4px; resize: vertical;
+  }
+  #log-form .form-row.actions { justify-content: flex-end; }
+  .btn {
+    border: 1px solid #bbb;
+    background: #fff;
+    color: #222;
+    border-radius: 6px;
+    padding: 5px 11px;
+    font-size: 12px;
+  }
+  .btn.primary { background: #1a365d; border-color: #1a365d; color: #fff; font-weight: 600; }
+  #plan-stats .btn { margin-top: 8px; }
+  #log-summary { margin-top: 4px; color: #333; }
+  #log-summary b { color: #15803d; }
+  #log-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 38vh; overflow-y: auto; }
+  #log-list li {
+    display: flex; gap: 8px; align-items: flex-start;
+    padding: 7px 0; border-top: 1px solid #e5e5e5; cursor: pointer;
+  }
+  #log-list .hike { flex: 1; min-width: 0; }
+  #log-list .hike-title { font-weight: 600; }
+  #log-list .muted { color: #666; font-size: 11.5px; }
+  #log-list .notes { color: #333; font-size: 12px; margin-top: 2px; overflow-wrap: anywhere; }
+  #log-list .del { border: none; background: transparent; color: #999; font-size: 18px; line-height: 1; padding: 0 2px; }
+  #log-empty { color: #666; margin-top: 6px; }
+  .log-actions { display: flex; gap: 8px; margin-top: 8px; }
+  #legend .swatch.hiked { background: #15803d; }
   #plan-reset {
     margin-left: auto;
     border: 1px solid #bbb;
@@ -207,8 +243,9 @@
 <div id="legend">
   <div class="legend-row"><div class="swatch"></div> Appalachian Trail</div>
   <div class="legend-row"><div class="dot"></div> Trailhead / Access Point</div>
+  <div class="legend-row" id="legend-hiked" hidden><div class="swatch hiked"></div> Your logged hikes</div>
 </div>
-<div id="planner" hidden>
+<div id="planner" class="panel" hidden>
   <header>Plan a hike <button id="plan-close" aria-label="Close planner">&times;</button></header>
   <div id="plan-hint"></div>
   <div id="plan-stats"></div>
@@ -216,6 +253,29 @@
     <label>Pace <input id="plan-pace" type="number" min="0.5" max="4" step="0.1" inputmode="decimal"> mph</label>
     <label>Hiking <input id="plan-hours" type="number" min="1" max="16" step="0.5" inputmode="decimal"> hrs/day</label>
     <button id="plan-reset">Reset</button>
+  </div>
+  <form id="log-form" hidden>
+    <div class="form-row">
+      <label>Date <input id="log-date" type="date" required></label>
+      <label>Took <input id="log-h" type="number" min="0" inputmode="numeric" placeholder="h"> h
+        <input id="log-m" type="number" min="0" max="59" inputmode="numeric" placeholder="m"> min</label>
+    </div>
+    <textarea id="log-notes" rows="2" placeholder="Notes (optional)"></textarea>
+    <div class="form-row actions">
+      <button type="button" class="btn" id="log-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Save to log</button>
+    </div>
+  </form>
+</div>
+<div id="logbook" class="panel" hidden>
+  <header>Hike log <button id="log-close" aria-label="Close log">&times;</button></header>
+  <div id="log-summary"></div>
+  <div id="log-empty">No hikes logged yet. Use Plan to pick a section, then tap &ldquo;Log this hike&rdquo;.</div>
+  <ul id="log-list"></ul>
+  <div class="log-actions">
+    <button class="btn" id="log-export">Export</button>
+    <button class="btn" id="log-import">Import</button>
+    <input id="log-import-file" type="file" accept="application/json,.json" hidden>
   </div>
 </div>
 
@@ -237,7 +297,7 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
   // Per-viewer preferences; storage can be unavailable (private mode), so never rely on it
   const prefs = {
     get(k, d) { try { const v = localStorage.getItem('at-' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
-    set(k, v) { try { localStorage.setItem('at-' + k, JSON.stringify(v)); } catch {} }
+    set(k, v) { try { localStorage.setItem('at-' + k, JSON.stringify(v)); return true; } catch { return false; } }
   };
 
   // Text buttons (Topo, Plan) in a control group under the zoom buttons
@@ -247,11 +307,14 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
   const planBtn = document.createElement('button');
   planBtn.textContent = 'Plan';
   planBtn.title = 'Plan a hike between two points';
+  const logBtn = document.createElement('button');
+  logBtn.textContent = 'Log';
+  logBtn.title = 'Your hike log';
   map.addControl({
     onAdd() {
       const div = document.createElement('div');
       div.className = 'maplibregl-ctrl maplibregl-ctrl-group text-ctrl';
-      div.append(topoBtn, planBtn);
+      div.append(topoBtn, planBtn, logBtn);
       return div;
     },
     onRemove() {}
@@ -404,6 +467,17 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
       }
     });
 
+    // Logged hikes, under the planned section
+    map.addSource('logged-hikes', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+      id: 'logged-hikes',
+      type: 'line',
+      source: 'logged-hikes',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#15803d', 'line-width': ['interpolate', ['linear'], ['zoom'], 3, 6, 8, 4, 12, 3, 17, 2] }
+    }, 'entrance-points');
+    routeReady.then(renderLog);
+
     // Selected hike section, drawn over the trail but under the trailhead dots
     map.addSource('hike-section', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
     map.addLayer({
@@ -524,6 +598,7 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
   hoursInput.value = prefs.get('hours', 8);
 
   const plan = { start: null, end: null, startMarker: null, endMarker: null };
+  const logForm = document.getElementById('log-form');
 
   function makeMarker(which, color) {
     const marker = new maplibregl.Marker({ color, draggable: true });
@@ -543,6 +618,37 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
     plan[key].setLngLat([p.lng, p.lat]).addTo(map);
   }
 
+  // Geometry and stats for the trail between two snapped points, in direction of travel
+  function sectionBetween(start, end) {
+    const [a, b] = start.mile <= end.mile ? [start, end] : [end, start];
+    const coords = [[a.lng, a.lat]], els = [a.elev], miles = [a.mile];
+    for (let i = a.i + 1; i <= b.i; i++) {
+      coords.push([route.lon[i], route.lat[i]]); els.push(route.elev[i]); miles.push(route.mile[i]);
+    }
+    coords.push([b.lng, b.lat]); els.push(b.elev); miles.push(b.mile);
+    const nobo = start.mile <= end.mile;
+    if (!nobo) { els.reverse(); miles.reverse(); miles.forEach((m, k) => miles[k] = a.mile + b.mile - m); }
+    return { coords, els, miles, nobo, dist: b.mile - a.mile, ...climb(els) };
+  }
+
+  // Inverse of snapToTrail's mile: the trail point at a given trail mile
+  function pointAtMile(m) {
+    const { n, lon, lat, mile, elev } = route;
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (mile[mid] <= m) lo = mid; else hi = mid; }
+    const t = mile[hi] > mile[lo] ? Math.min(1, Math.max(0, (m - mile[lo]) / (mile[hi] - mile[lo]))) : 0;
+    const at = arr => arr[lo] + (arr[hi] - arr[lo]) * t;
+    return { i: lo, lng: at(lon), lat: at(lat), mile: m, elev: at(elev) };
+  }
+
+  function fitSection(coords, panel) {
+    const bounds = coords.reduce((bb, c) => bb.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
+    map.fitBounds(bounds, {
+      padding: { top: 110, left: 40, right: 80, bottom: panel.offsetHeight + 40 },
+      maxZoom: 14
+    });
+  }
+
   function updatePlan(fit) {
     const { start, end } = plan;
     if (!route) hintEl.textContent = 'Loading trail data…';
@@ -557,18 +663,7 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
       return;
     }
 
-    // Section points in trail order, then flipped if hiking southbound
-    const [a, b] = start.mile <= end.mile ? [start, end] : [end, start];
-    const coords = [[a.lng, a.lat]], els = [a.elev], miles = [a.mile];
-    for (let i = a.i + 1; i <= b.i; i++) {
-      coords.push([route.lon[i], route.lat[i]]); els.push(route.elev[i]); miles.push(route.mile[i]);
-    }
-    coords.push([b.lng, b.lat]); els.push(b.elev); miles.push(b.mile);
-    const nobo = start.mile <= end.mile;
-    if (!nobo) { els.reverse(); miles.reverse(); miles.forEach((m, k) => miles[k] = a.mile + b.mile - m); }
-
-    const dist = b.mile - a.mile;
-    const { up, down } = climb(els);
+    const { coords, els, miles, nobo, dist, up, down } = sectionBetween(start, end);
     const pace = parseFloat(paceInput.value) > 0 ? parseFloat(paceInput.value) : 2;
     const hoursPerDay = parseFloat(hoursInput.value) > 0 ? parseFloat(hoursInput.value) : 8;
     // Naismith's rule: walking time at your pace plus 1 hour per 2,000 ft of climbing
@@ -584,19 +679,15 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
       </div>
       <div class="muted">Trail mile ${fmt(start.mile, 1)} (${fmt(start.elev)} ft) &rarr; ${fmt(end.mile, 1)} (${fmt(end.elev)} ft)</div>
       ${profileSvg(miles, els)}
-      <div class="muted">Time = distance at your pace + 1 hr per 2,000 ft climbed (Naismith's rule). GPS mileage runs a few percent under guidebook miles.</div>`;
+      <div class="muted">Time = distance at your pace + 1 hr per 2,000 ft climbed (Naismith's rule). GPS mileage runs a few percent under guidebook miles.</div>
+      ${logForm.hidden ? '<button class="btn primary" id="log-open">Log this hike</button>' : ''}`;
 
     section.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} });
-    if (fit) {
-      const bounds = coords.reduce((bb, c) => bb.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
-      map.fitBounds(bounds, {
-        padding: { top: 110, left: 40, right: 80, bottom: planner.offsetHeight + 40 },
-        maxZoom: 14
-      });
-    }
+    if (fit) fitSection(coords, planner);
   }
 
   function resetPlan() {
+    logForm.hidden = true;
     plan.startMarker?.remove();
     plan.endMarker?.remove();
     plan.start = plan.end = null;
@@ -604,6 +695,7 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
   }
 
   function setPlanning(on) {
+    if (on) setLogbook(false);
     planner.hidden = !on;
     legend.hidden = on;
     planBtn.classList.toggle('active', on);
@@ -627,6 +719,169 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
     else if (!plan.end) setPoint('end', e.lngLat);
     else return;
     updatePlan(!!plan.end);
+  });
+
+  // ---- Hike log ----
+  // Kept in this device's local storage; Export/Import moves it between devices or backs it up.
+  const logbook = document.getElementById('logbook');
+  const logList = document.getElementById('log-list');
+  let hikes = prefs.get('hikes', []);
+
+  const today = () => new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD, local time
+  const esc = str => str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const fmtDate = d => new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+  function saveHikes() {
+    if (!prefs.set('hikes', hikes)) {
+      alert('Could not save your hike log on this device (storage is unavailable, e.g. in private browsing).');
+    }
+    // Ask the browser not to evict the log under storage pressure
+    navigator.storage?.persist?.().catch(() => {});
+    renderLog();
+  }
+
+  // Trail miles covered at least once, counting overlapping hikes once
+  function uniqueMiles() {
+    const spans = hikes.map(h => [Math.min(h.start, h.end), Math.max(h.start, h.end)]).sort((x, y) => x[0] - y[0]);
+    let total = 0, cur = null;
+    for (const [s, e] of spans) {
+      if (!cur || s > cur[1]) { if (cur) total += cur[1] - cur[0]; cur = [s, e]; }
+      else cur[1] = Math.max(cur[1], e);
+    }
+    return cur ? total + cur[1] - cur[0] : total;
+  }
+
+  function renderLog() {
+    document.getElementById('legend-hiked').hidden = !hikes.length;
+    document.getElementById('log-empty').hidden = hikes.length > 0;
+    if (!route) return;
+    const trailMiles = route.mile[route.n - 1];
+    const done = uniqueMiles();
+    document.getElementById('log-summary').innerHTML = hikes.length
+      ? `<b>${fmt(done, 1)}</b> of ${fmt(trailMiles, 0)} trail miles (${fmt(done / trailMiles * 100, 1)}%) &middot; ${hikes.length} hike${hikes.length > 1 ? 's' : ''}`
+      : '';
+
+    const sorted = [...hikes].sort((x, y) => y.date.localeCompare(x.date) || y.id.localeCompare(x.id));
+    logList.innerHTML = sorted.map(h => `
+      <li data-id="${esc(h.id)}">
+        <div class="hike">
+          <div class="hike-title">${fmt(h.dist, 1)} mi ${h.start <= h.end ? 'NOBO' : 'SOBO'} &middot; ${fmtDate(h.date)}</div>
+          <div class="muted">Mile ${fmt(h.start, 1)} &rarr; ${fmt(h.end, 1)} &middot; &#9650; ${fmt(h.up)} ft${h.minutes ? ` &middot; took ${fmtDuration(h.minutes / 60)}` : ''}</div>
+          ${h.notes ? `<div class="notes">${esc(h.notes)}</div>` : ''}
+        </div>
+        <button class="del" aria-label="Delete hike">&times;</button>
+      </li>`).join('');
+
+    map.getSource('logged-hikes')?.setData({
+      type: 'FeatureCollection',
+      features: hikes.map(h => ({
+        type: 'Feature',
+        properties: { id: h.id },
+        geometry: { type: 'LineString', coordinates: sectionBetween(pointAtMile(h.start), pointAtMile(h.end)).coords }
+      }))
+    });
+  }
+
+  function setLogbook(on) {
+    if (on) setPlanning(false);
+    logbook.hidden = !on;
+    legend.hidden = on;
+    logBtn.classList.toggle('active', on);
+    if (on) routeReady.then(renderLog);
+  }
+
+  logBtn.addEventListener('click', () => setLogbook(logbook.hidden));
+  document.getElementById('log-close').addEventListener('click', () => setLogbook(false));
+
+  // "Log this hike" lives inside the planner's stats, which re-render
+  statsEl.addEventListener('click', e => {
+    if (e.target.id !== 'log-open') return;
+    document.getElementById('log-date').value = today();
+    document.getElementById('log-h').value = '';
+    document.getElementById('log-m').value = '';
+    document.getElementById('log-notes').value = '';
+    logForm.hidden = false;
+    updatePlan(false);
+  });
+  document.getElementById('log-cancel').addEventListener('click', () => { logForm.hidden = true; updatePlan(false); });
+
+  logForm.addEventListener('submit', e => {
+    e.preventDefault();
+    if (!plan.start || !plan.end) return;
+    const { dist, up, down } = sectionBetween(plan.start, plan.end);
+    const minutes = (parseInt(document.getElementById('log-h').value, 10) || 0) * 60
+                  + (parseInt(document.getElementById('log-m').value, 10) || 0);
+    hikes.push({
+      id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      date: document.getElementById('log-date').value || today(),
+      start: +plan.start.mile.toFixed(3),
+      end: +plan.end.mile.toFixed(3),
+      dist: +dist.toFixed(3),
+      up: Math.round(up),
+      down: Math.round(down),
+      minutes: minutes || null,
+      notes: document.getElementById('log-notes').value.trim()
+    });
+    saveHikes();
+    resetPlan();
+    hintEl.textContent = 'Saved to your log. Tap the trail to plan another.';
+  });
+
+  logList.addEventListener('click', e => {
+    const li = e.target.closest('li');
+    if (!li) return;
+    const hike = hikes.find(h => h.id === li.dataset.id);
+    if (e.target.closest('.del')) {
+      if (confirm(`Delete the ${fmt(hike.dist, 1)} mi hike from ${fmtDate(hike.date)}?`)) {
+        hikes = hikes.filter(h => h !== hike);
+        saveHikes();
+      }
+      return;
+    }
+    fitSection(sectionBetween(pointAtMile(hike.start), pointAtMile(hike.end)).coords, logbook);
+  });
+
+  document.getElementById('log-export').addEventListener('click', async () => {
+    const name = `at-hike-log-${today()}.json`;
+    const blob = new Blob([JSON.stringify({ app: 'at-trail-map', version: 1, hikes }, null, 2)], { type: 'application/json' });
+    const file = new File([blob], name, { type: 'application/json' });
+    // The share sheet is the reliable way to save a file from an iOS home-screen app
+    if (navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'AT hike log' }); } catch {}
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  const importInput = document.getElementById('log-import-file');
+  document.getElementById('log-import').addEventListener('click', () => importInput.click());
+  importInput.addEventListener('change', async () => {
+    const file = importInput.files[0];
+    importInput.value = '';
+    if (!file) return;
+    try {
+      const data = JSON.parse(await file.text());
+      const incoming = (Array.isArray(data) ? data : data.hikes || []).filter(h =>
+        h && typeof h.id === 'string' && Number.isFinite(h.start) && Number.isFinite(h.end) && typeof h.date === 'string');
+      const known = new Set(hikes.map(h => h.id));
+      const added = incoming.filter(h => !known.has(h.id) && known.add(h.id)).map(h => ({
+        ...h,
+        dist: Number.isFinite(h.dist) ? h.dist : Math.abs(h.end - h.start),
+        up: Number.isFinite(h.up) ? h.up : 0,
+        down: Number.isFinite(h.down) ? h.down : 0,
+        notes: typeof h.notes === 'string' ? h.notes : ''
+      }));
+      hikes.push(...added);
+      saveHikes();
+      alert(`Imported ${added.length} hike${added.length === 1 ? '' : 's'}` +
+        (incoming.length > added.length ? ` (${incoming.length - added.length} already in your log)` : '') + '.');
+    } catch {
+      alert('That file is not a hike log export.');
+    }
   });
 
   // Register service worker so the app shell is available on repeat visits /
