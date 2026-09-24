@@ -2,7 +2,7 @@
   "name": "Appalachian Trail Map",
   "short_name": "AT Trail",
   "description": "Interactive map of the Appalachian National Scenic Trail with trailhead access points.",
-  "start_url": "./appalachian-trail-map.html",
+  "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait-primary",

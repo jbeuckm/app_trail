@@ -1,6 +1,7 @@
-const CACHE_NAME = 'at-trail-shell-v1';
+const CACHE_NAME = 'at-trail-shell-v2';
 const SHELL_FILES = [
-  './appalachian-trail-map.html',
+  './',
+  './index.html',
   './manifest.webmanifest',
   './icons/icon-192.png',
   './icons/icon-512.png',
