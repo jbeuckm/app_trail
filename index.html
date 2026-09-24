@@ -17,6 +17,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4/dist/maplibre-gl.js"></script>
 <link href="https://cdn.jsdelivr.net/npm/maplibre-gl@4/dist/maplibre-gl.css" rel="stylesheet" />
+<script src="https://cdn.jsdelivr.net/npm/maplibre-contour@0.1.1/dist/index.min.js"></script>
 <style>
   :root {
     --sat: env(safe-area-inset-top, 0px);
@@ -121,6 +122,78 @@
     border-radius: 50%;
     box-shadow: 0 0 0 1px rgba(0,0,0,0.2);
   }
+
+  /* Text buttons stacked under the zoom control */
+  .text-ctrl button {
+    width: auto;
+    min-width: 29px;
+    padding: 0 9px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #333;
+  }
+  .text-ctrl button.active { background: #1a365d; color: #fff; }
+
+  #planner {
+    position: absolute;
+    left: calc(12px + var(--sal));
+    right: calc(12px + var(--sar));
+    bottom: calc(24px + var(--sab));
+    z-index: 2;
+    max-width: 400px;
+    background: rgba(255, 255, 255, 0.96);
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+    padding: 10px 12px 12px;
+    font-size: 13px;
+    color: #222;
+  }
+  #planner[hidden], #legend[hidden] { display: none; }
+  #planner header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  #planner header button {
+    border: none;
+    background: transparent;
+    font-size: 20px;
+    line-height: 1;
+    color: #888;
+    padding: 0 2px;
+  }
+  #plan-hint { color: #555; margin-top: 4px; }
+  #plan-stats { margin-top: 6px; }
+  #plan-stats .big { font-size: 20px; font-weight: 700; color: #1a365d; }
+  #plan-stats .row { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 4px; }
+  #plan-stats .muted { color: #666; font-size: 11.5px; }
+  #plan-profile { display: block; width: 100%; height: 56px; margin-top: 6px; }
+  #plan-settings {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 8px;
+    font-size: 12px;
+    color: #444;
+  }
+  #plan-settings input {
+    width: 48px;
+    font-size: 16px; /* avoids iOS zoom-on-focus */
+    padding: 2px 4px;
+    border: 1px solid #bbb;
+    border-radius: 4px;
+  }
+  #plan-reset {
+    margin-left: auto;
+    border: 1px solid #bbb;
+    background: #fff;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+  }
 </style>
 </head>
 <body>
@@ -134,6 +207,16 @@
 <div id="legend">
   <div class="legend-row"><div class="swatch"></div> Appalachian Trail</div>
   <div class="legend-row"><div class="dot"></div> Trailhead / Access Point</div>
+</div>
+<div id="planner" hidden>
+  <header>Plan a hike <button id="plan-close" aria-label="Close planner">&times;</button></header>
+  <div id="plan-hint"></div>
+  <div id="plan-stats"></div>
+  <div id="plan-settings">
+    <label>Pace <input id="plan-pace" type="number" min="0.5" max="4" step="0.1" inputmode="decimal"> mph</label>
+    <label>Hiking <input id="plan-hours" type="number" min="1" max="16" step="0.5" inputmode="decimal"> hrs/day</label>
+    <button id="plan-reset">Reset</button>
+  </div>
 </div>
 
 <script>
@@ -151,7 +234,102 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
   map.addControl(new maplibregl.NavigationControl(), 'top-right');
   map.addControl(new maplibregl.ScaleControl({ unit: 'imperial' }), 'bottom-right');
 
+  // Per-viewer preferences; storage can be unavailable (private mode), so never rely on it
+  const prefs = {
+    get(k, d) { try { const v = localStorage.getItem('at-' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem('at-' + k, JSON.stringify(v)); } catch {} }
+  };
+
+  // Text buttons (Topo, Plan) in a control group under the zoom buttons
+  const topoBtn = document.createElement('button');
+  topoBtn.textContent = 'Topo';
+  topoBtn.title = 'Toggle hillshade and contour lines';
+  const planBtn = document.createElement('button');
+  planBtn.textContent = 'Plan';
+  planBtn.title = 'Plan a hike between two points';
+  map.addControl({
+    onAdd() {
+      const div = document.createElement('div');
+      div.className = 'maplibregl-ctrl maplibregl-ctrl-group text-ctrl';
+      div.append(topoBtn, planBtn);
+      return div;
+    },
+    onRemove() {}
+  }, 'top-right');
+
+  // Topographic layer: hillshade + contour lines generated client-side from AWS Terrain Tiles
+  const DEM_URL = 'https://elevation-tiles-prod.s3.amazonaws.com/terrarium/{z}/{x}/{y}.png';
+  const TOPO_LAYERS = ['topo-hillshade', 'topo-contours', 'topo-contour-labels'];
+  const demSource = new mlcontour.DemSource({ url: DEM_URL, encoding: 'terrarium', maxzoom: 13, worker: true });
+  demSource.setupMaplibre(maplibregl);
+
+  function addTopoLayers() {
+    // Draw under the basemap's labels so place names stay readable
+    const firstSymbol = map.getStyle().layers.find(l => l.type === 'symbol')?.id;
+    map.addSource('dem', {
+      type: 'raster-dem',
+      encoding: 'terrarium',
+      tiles: [demSource.sharedDemProtocolUrl],
+      tileSize: 256,
+      maxzoom: 13
+    });
+    map.addSource('contour-source', {
+      type: 'vector',
+      tiles: [demSource.contourProtocolUrl({
+        multiplier: 3.28084, // feet
+        thresholds: { 10: [500, 2500], 11: [200, 1000], 12: [100, 500], 14: [40, 200] },
+        elevationKey: 'ele',
+        levelKey: 'level',
+        contourLayer: 'contours'
+      })],
+      maxzoom: 15
+    });
+    map.addLayer({
+      id: 'topo-hillshade',
+      type: 'hillshade',
+      source: 'dem',
+      paint: { 'hillshade-exaggeration': 0.35, 'hillshade-shadow-color': '#473b24' }
+    }, firstSymbol);
+    map.addLayer({
+      id: 'topo-contours',
+      type: 'line',
+      source: 'contour-source',
+      'source-layer': 'contours',
+      minzoom: 10,
+      paint: {
+        'line-color': '#8b6d3f',
+        'line-opacity': 0.55,
+        'line-width': ['match', ['get', 'level'], 1, 1, 0.5]
+      }
+    }, firstSymbol);
+    map.addLayer({
+      id: 'topo-contour-labels',
+      type: 'symbol',
+      source: 'contour-source',
+      'source-layer': 'contours',
+      minzoom: 11,
+      filter: ['>', ['get', 'level'], 0],
+      layout: {
+        'symbol-placement': 'line',
+        'text-field': ['concat', ['number-format', ['get', 'ele'], {}], ' ft'],
+        'text-font': ['Noto Sans Regular'],
+        'text-size': 10
+      },
+      paint: { 'text-color': '#6b5230', 'text-halo-color': '#ffffff', 'text-halo-width': 1 }
+    }, firstSymbol);
+  }
+
+  function setTopo(on) {
+    TOPO_LAYERS.forEach(id => map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'));
+    topoBtn.classList.toggle('active', on);
+    prefs.set('topo', on);
+  }
+  topoBtn.addEventListener('click', () => setTopo(!topoBtn.classList.contains('active')));
+
   map.on('load', () => {
+    addTopoLayers();
+    setTopo(prefs.get('topo', true));
+
     map.addSource('appalachian-trail', {
       type: 'geojson',
       data: trailData
@@ -219,6 +397,23 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
       }
     });
 
+    // Selected hike section, drawn over the trail but under the trailhead dots
+    map.addSource('hike-section', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({
+      id: 'hike-section-casing',
+      type: 'line',
+      source: 'hike-section',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#ffffff', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 8, 12, 9, 17, 7] }
+    }, 'entrance-points');
+    map.addLayer({
+      id: 'hike-section',
+      type: 'line',
+      source: 'hike-section',
+      layout: { 'line-join': 'round', 'line-cap': 'round' },
+      paint: { 'line-color': '#6b21a8', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 5, 12, 5, 17, 4] }
+    }, 'entrance-points');
+
     // Fit to the trail's full extent (Georgia to Maine)
     const bounds = new maplibregl.LngLatBounds();
     const extend = coords => {
@@ -239,6 +434,192 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
     e.stopPropagation();
     const collapsed = titleEl.classList.toggle('collapsed');
     collapseBtn.innerHTML = collapsed ? '&#43;' : '&#8722;';
+  });
+
+  // ---- Hike planner ----
+  // route.json holds one continuous Springer -> Katahdin line with cumulative trail
+  // miles and elevation (ft) per point, delta-encoded to keep the download small.
+  let route = null;
+  const routeReady = fetch('route.json')
+    .then(r => r.json())
+    .then(j => {
+      const n = j.points, d = j.data;
+      const lon = new Float64Array(n), lat = new Float64Array(n);
+      const mile = new Float64Array(n), elev = new Float64Array(n);
+      let x = 0, y = 0, m = 0, e = 0;
+      for (let i = 0; i < n; i++) {
+        x += d[4 * i]; y += d[4 * i + 1]; m += d[4 * i + 2]; e += d[4 * i + 3];
+        lon[i] = x / 1e5; lat[i] = y / 1e5; mile[i] = m / 1000; elev[i] = e;
+      }
+      route = { n, lon, lat, mile, elev };
+    });
+
+  // Nearest point on the trail to a location (flat-earth approximation is fine at tap scale)
+  function snapToTrail(lngLat) {
+    const { n, lon, lat, mile, elev } = route;
+    const kx = Math.cos(lngLat.lat * Math.PI / 180);
+    let best = Infinity, bi = 0, bt = 0;
+    for (let i = 0; i < n - 1; i++) {
+      const ax = (lon[i] - lngLat.lng) * kx, ay = lat[i] - lngLat.lat;
+      const dx = (lon[i + 1] - lon[i]) * kx, dy = lat[i + 1] - lat[i];
+      const len2 = dx * dx + dy * dy;
+      const t = len2 ? Math.min(1, Math.max(0, -(ax * dx + ay * dy) / len2)) : 0;
+      const px = ax + t * dx, py = ay + t * dy, d2 = px * px + py * py;
+      if (d2 < best) { best = d2; bi = i; bt = t; }
+    }
+    const at = arr => arr[bi] + (arr[bi + 1] - arr[bi]) * bt;
+    return { i: bi, lng: at(lon), lat: at(lat), mile: at(mile), elev: at(elev) };
+  }
+
+  // Total climb/descent, ignoring wiggles under 20 ft (elevation-model noise)
+  function climb(els) {
+    let up = 0, down = 0, ref = els[0];
+    for (let k = 1; k < els.length; k++) {
+      const e = els[k];
+      if (e - ref >= 20) { up += e - ref; ref = e; }
+      else if (ref - e >= 20) { down += ref - e; ref = e; }
+    }
+    return { up, down };
+  }
+
+  const fmt = (v, digits = 0) => v.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  function fmtDuration(hours) {
+    const mins = Math.round(hours * 60);
+    if (mins < 60) return `${mins} min`;
+    if (hours >= 24) return `${fmt(Math.round(hours))} hrs`;
+    return `${Math.floor(mins / 60)} h ${mins % 60} min`;
+  }
+
+  function profileSvg(miles, els) {
+    const W = 300, H = 56, step = Math.max(1, Math.floor(els.length / 300));
+    let lo = Infinity, hi = -Infinity;
+    for (const e of els) { if (e < lo) lo = e; if (e > hi) hi = e; }
+    const span = Math.max(hi - lo, 100);
+    const m0 = miles[0], mSpan = (miles[miles.length - 1] - m0) || 1;
+    const pts = [];
+    for (let k = 0; k < els.length; k += step) pts.push([k, els[k]]);
+    pts.push([els.length - 1, els[els.length - 1]]);
+    const xy = pts.map(([k, e]) =>
+      `${((miles[k] - m0) / mSpan * W).toFixed(1)},${(H - 2 - (e - lo) / span * (H - 6)).toFixed(1)}`);
+    return `<svg id="plan-profile" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Elevation profile">
+      <polygon points="0,${H} ${xy.join(' ')} ${W},${H}" fill="#6b21a8" fill-opacity="0.15"/>
+      <polyline points="${xy.join(' ')}" fill="none" stroke="#6b21a8" stroke-width="1.5" vector-effect="non-scaling-stroke"/>
+    </svg>`;
+  }
+
+  const planner = document.getElementById('planner');
+  const legend = document.getElementById('legend');
+  const hintEl = document.getElementById('plan-hint');
+  const statsEl = document.getElementById('plan-stats');
+  const paceInput = document.getElementById('plan-pace');
+  const hoursInput = document.getElementById('plan-hours');
+  paceInput.value = prefs.get('pace', 2);
+  hoursInput.value = prefs.get('hours', 8);
+
+  const plan = { start: null, end: null, startMarker: null, endMarker: null };
+
+  function makeMarker(which, color) {
+    const marker = new maplibregl.Marker({ color, draggable: true });
+    marker.on('dragend', () => {
+      plan[which] = snapToTrail(marker.getLngLat());
+      marker.setLngLat([plan[which].lng, plan[which].lat]);
+      updatePlan(false);
+    });
+    return marker;
+  }
+
+  function setPoint(which, lngLat) {
+    const p = snapToTrail(lngLat);
+    plan[which] = p;
+    const key = which + 'Marker';
+    if (!plan[key]) plan[key] = makeMarker(which, which === 'start' ? '#16a34a' : '#dc2626');
+    plan[key].setLngLat([p.lng, p.lat]).addTo(map);
+  }
+
+  function updatePlan(fit) {
+    const { start, end } = plan;
+    if (!route) hintEl.textContent = 'Loading trail data…';
+    else if (!start) hintEl.textContent = 'Tap the trail to set your start point.';
+    else if (!end) hintEl.textContent = 'Now tap to set your end point.';
+    else hintEl.textContent = 'Drag the pins to adjust.';
+
+    const section = map.getSource('hike-section');
+    if (!start || !end) {
+      statsEl.innerHTML = '';
+      section?.setData({ type: 'FeatureCollection', features: [] });
+      return;
+    }
+
+    // Section points in trail order, then flipped if hiking southbound
+    const [a, b] = start.mile <= end.mile ? [start, end] : [end, start];
+    const coords = [[a.lng, a.lat]], els = [a.elev], miles = [a.mile];
+    for (let i = a.i + 1; i <= b.i; i++) {
+      coords.push([route.lon[i], route.lat[i]]); els.push(route.elev[i]); miles.push(route.mile[i]);
+    }
+    coords.push([b.lng, b.lat]); els.push(b.elev); miles.push(b.mile);
+    const nobo = start.mile <= end.mile;
+    if (!nobo) { els.reverse(); miles.reverse(); miles.forEach((m, k) => miles[k] = a.mile + b.mile - m); }
+
+    const dist = b.mile - a.mile;
+    const { up, down } = climb(els);
+    const pace = parseFloat(paceInput.value) > 0 ? parseFloat(paceInput.value) : 2;
+    const hoursPerDay = parseFloat(hoursInput.value) > 0 ? parseFloat(hoursInput.value) : 8;
+    // Naismith's rule: walking time at your pace plus 1 hour per 2,000 ft of climbing
+    const hours = dist / pace + up / 2000;
+    const days = hours / hoursPerDay;
+
+    statsEl.innerHTML = `
+      <div class="big">${fmt(dist, 1)} mi · ${fmtDuration(hours)}</div>
+      <div class="row">
+        <span>&#9650; ${fmt(up)} ft</span><span>&#9660; ${fmt(down)} ft</span>
+        <span>${nobo ? 'Northbound' : 'Southbound'}</span>
+        ${days > 1 ? `<span>&asymp; ${fmt(days, 1)} days</span>` : ''}
+      </div>
+      <div class="muted">Trail mile ${fmt(start.mile, 1)} (${fmt(start.elev)} ft) &rarr; ${fmt(end.mile, 1)} (${fmt(end.elev)} ft)</div>
+      ${profileSvg(miles, els)}
+      <div class="muted">Time = distance at your pace + 1 hr per 2,000 ft climbed (Naismith's rule). GPS mileage runs a few percent under guidebook miles.</div>`;
+
+    section.setData({ type: 'Feature', geometry: { type: 'LineString', coordinates: coords }, properties: {} });
+    if (fit) {
+      const bounds = coords.reduce((bb, c) => bb.extend(c), new maplibregl.LngLatBounds(coords[0], coords[0]));
+      map.fitBounds(bounds, {
+        padding: { top: 110, left: 40, right: 80, bottom: planner.offsetHeight + 40 },
+        maxZoom: 14
+      });
+    }
+  }
+
+  function resetPlan() {
+    plan.startMarker?.remove();
+    plan.endMarker?.remove();
+    plan.start = plan.end = null;
+    updatePlan(false);
+  }
+
+  function setPlanning(on) {
+    planner.hidden = !on;
+    legend.hidden = on;
+    planBtn.classList.toggle('active', on);
+    map.getCanvas().style.cursor = on ? 'crosshair' : '';
+    if (on) routeReady.then(() => updatePlan(false)); else resetPlan();
+    updatePlan(false);
+  }
+
+  planBtn.addEventListener('click', () => setPlanning(planner.hidden));
+  document.getElementById('plan-close').addEventListener('click', () => setPlanning(false));
+  document.getElementById('plan-reset').addEventListener('click', resetPlan);
+  [paceInput, hoursInput].forEach(input => input.addEventListener('input', () => {
+    const v = parseFloat(input.value);
+    if (v > 0) prefs.set(input === paceInput ? 'pace' : 'hours', v);
+    updatePlan(false);
+  }));
+
+  map.on('click', e => {
+    if (planner.hidden || !route) return;
+    if (!plan.start) setPoint('start', e.lngLat);
+    else if (!plan.end) setPoint('end', e.lngLat);
+    else return;
+    updatePlan(!!plan.end);
   });
 
   // Register service worker so the app shell is available on repeat visits /

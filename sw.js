@@ -1,10 +1,11 @@
-const CACHE_NAME = 'at-trail-shell-v5';
+const CACHE_NAME = 'at-trail-shell-v6';
 
 // Exact URLs for the app shell (cache-first: always served from cache once installed).
 const SHELL_FILES = [
   './',
   './index.html',
   './manifest.webmanifest',
+  './route.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/apple-touch-icon.png',
@@ -18,6 +19,7 @@ const SHELL_FILES = [
 const LIBRARY_URLS = [
   'https://cdn.jsdelivr.net/npm/maplibre-gl@4/dist/maplibre-gl.js',
   'https://cdn.jsdelivr.net/npm/maplibre-gl@4/dist/maplibre-gl.css',
+  'https://cdn.jsdelivr.net/npm/maplibre-contour@0.1.1/dist/index.min.js',
   'https://tiles.openfreemap.org/styles/liberty'
 ];
 
