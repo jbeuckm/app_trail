@@ -149,7 +149,7 @@
     font-size: 13px;
     color: #222;
   }
-  .panel[hidden], #legend[hidden], .legend-row[hidden], #log-form[hidden] { display: none; }
+  .panel[hidden], #legend[hidden], #legend [hidden], #log-form[hidden] { display: none; }
   .panel header {
     display: flex;
     align-items: center;
@@ -224,6 +224,12 @@
   .log-actions { display: flex; gap: 8px; margin-top: 8px; }
   #legend .swatch.hiked { background: #15803d; }
   #legend .wild-dots { display: flex; gap: 2px; }
+  #wild-season { display: flex; gap: 4px; margin-top: 4px; }
+  #wild-season button {
+    border: 1px solid #bbb; background: #fff; color: #333;
+    border-radius: 10px; padding: 2px 7px; font-size: 11px;
+  }
+  #wild-season button.active { background: #1a365d; border-color: #1a365d; color: #fff; }
   #legend .wild-dots i { width: 7px; height: 7px; border-radius: 50%; border: 1px solid #fff; }
 
   .inat-popup { width: 200px; font-size: 12px; color: #222; }
@@ -254,11 +260,18 @@
 <div id="legend">
   <div class="legend-row"><div class="swatch"></div> Appalachian Trail</div>
   <div class="legend-row"><div class="dot"></div> Trailhead / Access Point</div>
+  <div class="legend-row" id="legend-hiked" hidden><div class="swatch hiked"></div> Your logged hikes</div>
   <div class="legend-row" id="legend-wild" hidden>
     <div class="wild-dots"><i style="background:#92400e"></i><i style="background:#0284c7"></i><i style="background:#65a30d"></i><i style="background:#d97706"></i></div>
     Wildlife sightings (iNaturalist)
   </div>
-  <div class="legend-row" id="legend-hiked" hidden><div class="swatch hiked"></div> Your logged hikes</div>
+  <div id="wild-season" hidden>
+    <button data-season="all">All year</button>
+    <button data-season="spring">Spring</button>
+    <button data-season="summer">Summer</button>
+    <button data-season="fall">Fall</button>
+    <button data-season="winter">Winter</button>
+  </div>
 </div>
 <div id="planner" class="panel" hidden>
   <header>Plan a hike <button id="plan-close" aria-label="Close planner">&times;</button></header>
@@ -303,7 +316,14 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
     container: 'map',
     style: 'https://tiles.openfreemap.org/styles/liberty',
     center: [-77.5, 40.2],
-    zoom: 5.5
+    zoom: 5.5,
+    attributionControl: false
+  });
+  // Collapsible credits in the corner, so they don't cover the legend on phones
+  map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+  // MapLibre opens compact credits at first; start them collapsed (tap the ⓘ to read them)
+  map.once('load', () => {
+    document.querySelector('.maplibregl-ctrl-attrib')?.classList.remove('maplibregl-compact-show');
   });
 
   map.addControl(new maplibregl.NavigationControl(), 'top-right');
@@ -914,7 +934,12 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
   // Research-grade animal observations inside iNaturalist's "Appalachian National Scenic
   // Trail" place. Zoomed out: iNaturalist's heatmap tiles. Zoomed in: clickable
   // points fetched for the visible area. Needs a connection; nothing is stored offline.
-  const INAT_FILTER = 'place_id=95097&taxon_id=1&quality_grade=research';
+  const SEASON_MONTHS = { all: '', spring: '3,4,5', summer: '6,7,8', fall: '9,10,11', winter: '12,1,2' };
+  let wildSeason = prefs.get('wildSeason', 'all');
+  if (!(wildSeason in SEASON_MONTHS)) wildSeason = 'all';
+  const inatFilter = () => 'place_id=95097&taxon_id=1&quality_grade=research' +
+    (SEASON_MONTHS[wildSeason] ? `&month=${SEASON_MONTHS[wildSeason]}` : '');
+  const inatTileUrl = () => `https://api.inaturalist.org/v1/heatmap/{z}/{x}/{y}.png?${inatFilter()}`;
   const INAT_POINTS_MINZOOM = 10;
   const INAT_ATTRIBUTION = 'Wildlife: <a href="https://www.inaturalist.org" target="_blank">iNaturalist</a>';
   const INAT_COLORS = ['match', ['get', 'group'],
@@ -929,7 +954,7 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
   function addWildlifeLayers() {
     map.addSource('inat-tiles', {
       type: 'raster',
-      tiles: [`https://api.inaturalist.org/v1/heatmap/{z}/{x}/{y}.png?${INAT_FILTER}`],
+      tiles: [inatTileUrl()],
       tileSize: 256,
       attribution: INAT_ATTRIBUTION
     });
@@ -957,7 +982,7 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
     sightingsFetch?.abort();
     sightingsFetch = new AbortController();
     const fields = 'id,observed_on,uri,geojson,taxon.name,taxon.preferred_common_name,taxon.iconic_taxon_name,photos.url,photos.attribution,user.login';
-    fetch(`https://api.inaturalist.org/v2/observations?${INAT_FILTER}&${bbox}&per_page=200&fields=${fields}`,
+    fetch(`https://api.inaturalist.org/v2/observations?${inatFilter()}&${bbox}&per_page=200&fields=${fields}`,
       { signal: sightingsFetch.signal })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
       .then(({ results }) => {
@@ -989,10 +1014,29 @@ const entranceData = {"type": "FeatureCollection", "features": [{"type": "Featur
     ['inat-tiles', 'inat-points'].forEach(id => map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none'));
     wildBtn.classList.toggle('active', on);
     document.getElementById('legend-wild').hidden = !on;
+    seasonEl.hidden = !on;
     prefs.set('wildlife', on);
     loadSightings();
   }
   wildBtn.addEventListener('click', () => setWildlife(!wildBtn.classList.contains('active')));
+
+  // Season filter: observations from those months in any year
+  const seasonEl = document.getElementById('wild-season');
+  function showSeason() {
+    seasonEl.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.season === wildSeason));
+  }
+  showSeason();
+  seasonEl.addEventListener('click', e => {
+    const season = e.target.dataset?.season;
+    if (!season || season === wildSeason) return;
+    wildSeason = season;
+    prefs.set('wildSeason', season);
+    showSeason();
+    map.getSource('inat-tiles').setTiles([inatTileUrl()]);
+    sightings.clear();
+    map.getSource('inat').setData({ type: 'FeatureCollection', features: [] });
+    loadSightings();
+  });
 
   // Debounced so panning doesn't hammer the API (iNaturalist asks for ~1 request/sec at most)
   map.on('moveend', () => {
